@@ -70,7 +70,7 @@ void VenetianBlinds::loop() {
             relative_tilt=clamp(relative_tilt+1,-100,0);
             exact_tilt=clamp(exact_tilt+1,0,100);
         }
-        if(current_time - last_position_update >= (this->open_duration / 100)) {
+        if(current_time - last_position_update >= (this->close_duration / 100)) {
             last_position_update = current_time;
             relative_pos=clamp(relative_pos-1,0,100);
             exact_pos--;
@@ -98,7 +98,7 @@ void VenetianBlinds::loop() {
             relative_tilt=clamp(relative_tilt-1,0,100);
             exact_tilt=clamp(exact_tilt-1,0,100);
         }
-        if(current_time - last_position_update >= (this->close_duration / 100)) {
+        if(current_time - last_position_update >= (this->open_duration / 100)) {
             last_position_update = current_time;
             relative_pos=clamp(relative_pos+1,-100,0);
             exact_pos++;
