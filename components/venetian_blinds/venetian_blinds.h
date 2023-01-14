@@ -22,6 +22,7 @@ class VenetianBlinds : public Component, public cover::Cover {
     void set_assumed_state(bool value) { this->assumed_state = value; }
   private:
     int starting_time{0};
+    int wait_time{0};
     int exact_pos{0};
     int starting_pos{0};
     int rest_pos{0};

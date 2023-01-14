@@ -6,6 +6,7 @@ namespace esphome {
 namespace venetian_blinds {
 
 static const char *TAG = "venetian_blinds.cover";
+static const int WaitTimeDefault = 180;// waiting for movement start, when little tilt change
 
 using namespace esphome::cover;
 
@@ -25,8 +26,11 @@ void VenetianBlinds::setup() {
         this->tilt = 0.0;
     }
 
-    exact_pos = this->position;
-    exact_tilt = this->tilt;
+    exact_pos = this->position * this->close_duration;
+    exact_tilt = this->tilt * this->tilt_duration;
+
+    ESP_LOGCONFIG(TAG, "Initial position: %.1f", this->position * 100);
+    ESP_LOGCONFIG(TAG, "Initial tilt: %.1f", this->tilt * 100);
 }
 
 CoverTraits VenetianBlinds::get_traits() {
@@ -46,8 +50,6 @@ void VenetianBlinds::control(const CoverCall &call) {
         rest_pos = change_pos;
         change_tilt = 0;
         rest_tilt = 0;
-        starting_time = millis();
-        publishingDelay = 0;
     }
 
     if (call.get_tilt().has_value()) {
@@ -58,6 +60,9 @@ void VenetianBlinds::control(const CoverCall &call) {
         rest_tilt = change_tilt;
         change_pos = 0;
         rest_pos = 0;
+    }
+
+    if (call.get_position().has_value() || call.get_tilt().has_value()) {
         starting_time = millis();
         publishingDelay = 0;
     }
@@ -74,15 +79,26 @@ void VenetianBlinds::control(const CoverCall &call) {
 }
 
 void VenetianBlinds::loop() {
-    if (rest_pos > 0 || rest_tilt < 0) {
-        uint32_t current_time = millis();
-        int delta_time = current_time - starting_time;
-        publishingDelay++;
+    if (wait_time > 0) {
+        if (wait_time > (millis() - starting_time))
+            return;
+        else {
+            wait_time = 0;
+            starting_time = millis();
+        }
+    }
 
+    if (rest_pos > 0 || rest_tilt < 0) {
         if (this->current_action != COVER_OPERATION_CLOSING) {
             this->close_trigger->trigger();
             this->current_action = COVER_OPERATION_CLOSING;
+            wait_time = WaitTimeDefault;
+            return;
         }
+
+        uint32_t current_time = millis();
+        int delta_time = current_time - starting_time;
+        publishingDelay++;
 
         rest_tilt = clamp(change_tilt + delta_time, -1 * this->tilt_duration, 0);
         exact_tilt = clamp(starting_tilt + delta_time, 0, this->tilt_duration);
@@ -100,14 +116,16 @@ void VenetianBlinds::loop() {
         }
     } 
     else if (rest_pos < 0 || rest_tilt > 0) {
-        uint32_t current_time = millis();
-        int delta_time = current_time - starting_time;
-        publishingDelay++;
-
         if (this->current_action != COVER_OPERATION_OPENING) {
             this->open_trigger->trigger();
             this->current_action = COVER_OPERATION_OPENING;
+            wait_time = WaitTimeDefault;
+            return;
         }
+
+        uint32_t current_time = millis();
+        int delta_time = current_time - starting_time;
+        publishingDelay++;
 
         rest_tilt = clamp(change_tilt - delta_time, 0, this->tilt_duration);
         exact_tilt = clamp(starting_tilt - delta_time, 0, this->tilt_duration);
