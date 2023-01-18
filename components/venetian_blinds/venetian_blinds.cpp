@@ -7,6 +7,7 @@ namespace esphome {
 
 		static const char* TAG = "venetian_blinds.cover";
 		static const int WaitTimeDefault = 180;// waiting for movement start, when little tilt change
+		static const bool IsTestingMode = false;
 
 		using namespace esphome::cover;
 
@@ -51,6 +52,9 @@ namespace esphome {
 				rest_pos = change_pos;
 				change_tilt = 0;
 				rest_tilt = 0;
+
+				if (rest_pos == 0)
+					this->processDeferredTilts();
 			}
 
 			if (call.get_tilt().has_value()) {
@@ -75,6 +79,7 @@ namespace esphome {
 				change_tilt = 0;
 				this->stop_trigger->trigger();
 				this->current_action = COVER_OPERATION_IDLE;
+				this->deferred_tilt.reset();
 				this->publishCoverState();
 			}
 		}
@@ -91,7 +96,8 @@ namespace esphome {
 
 			if (rest_pos > 0 || rest_tilt < 0) {
 				if (this->current_action != COVER_OPERATION_CLOSING) {
-					this->close_trigger->trigger();
+					if (IsTestingMode == false)
+						this->close_trigger->trigger();
 					this->current_action = COVER_OPERATION_CLOSING;
 					wait_time = WaitTimeDefault;
 					return;
@@ -110,6 +116,7 @@ namespace esphome {
 				if (rest_pos <= 0 && rest_tilt >= 0) {
 					this->stop_trigger->trigger();
 					this->current_action = COVER_OPERATION_IDLE;
+					this->processDeferredTilts();
 					this->publishCoverState();
 				}
 				else if (publishingDelay % 100 == 0) {
@@ -118,7 +125,8 @@ namespace esphome {
 			}
 			else if (rest_pos < 0 || rest_tilt > 0) {
 				if (this->current_action != COVER_OPERATION_OPENING) {
-					this->open_trigger->trigger();
+					if (IsTestingMode == false)
+						this->open_trigger->trigger();
 					this->current_action = COVER_OPERATION_OPENING;
 					wait_time = WaitTimeDefault;
 					return;
@@ -138,6 +146,7 @@ namespace esphome {
 					this->stop_trigger->trigger();
 					this->current_action = COVER_OPERATION_IDLE;
 					this->publishCoverState();
+					this->processDeferredTilts();
 				}
 				else if (publishingDelay % 100 == 0) {
 					this->publishCoverState();
@@ -149,7 +158,89 @@ namespace esphome {
 			this->position = exact_pos / (float)this->close_duration;
 			this->tilt = exact_tilt / (float)this->tilt_duration;
 			this->publish_state();
-		};
+		}
 
+		void VenetianBlinds::processDeferredTilts() {
+			if (this->deferred_tilt.has_value()) {
+				ESP_LOGD(TAG, "processing deferred_tilt= %.1f", this->deferred_tilt.value() / 1.0);
+				auto call = this->make_call();
+				call.set_tilt(this->deferred_tilt.value() / 100.0);
+				this->deferred_tilt.reset();
+				call.perform();
+			}
+		}
+
+		void VenetianBlinds::StartCalibration() {
+			this->position = .3;
+			this->tilt = .3;
+			this->publish_state();
+		}
+
+		void VenetianBlinds::ProcessButton(std::string buttonType, std::string pressMode) {
+			int exactPosPerc = exact_pos / (float)this->close_duration * 100;
+			int exactTiltPerc = exact_tilt / (float)this->tilt_duration * 100;
+
+			optional<int> requestedPos{};
+			optional<int> requestedTilt{};
+
+			if (buttonType == "up") {
+				if (pressMode == "single")
+				{
+					if (exactPosPerc < 3 && exactTiltPerc > 5) {
+						requestedPos = 0;
+						requestedTilt = 0;
+					}
+					else if (exactPosPerc < 10) {
+						requestedPos = 10;
+						requestedTilt = 0;
+					}
+				}
+				else if (pressMode == "double") {
+					requestedPos = 10;
+					requestedTilt = 0;
+				}
+			}
+			else if (buttonType == "down") {
+				if (pressMode == "single") {
+					if (exactPosPerc > 3) {
+						requestedPos = 0;
+						requestedTilt = 0;
+					}
+					else if (exactPosPerc > 0) {
+						requestedPos = 0;
+						requestedTilt = 100;
+					}
+				}
+				else if (pressMode == "double") {
+					requestedPos = 0;
+					requestedTilt = 100;
+				}
+			}
+
+			this->deferred_tilt.reset();
+
+			if (requestedPos.has_value()) {
+				if (requestedTilt.has_value()) {
+					ESP_LOGD(TAG, "set deferred_tilt= %.1f", requestedTilt.value() / 1.0);
+					this->deferred_tilt = requestedTilt.value() / 1.0;
+				}
+
+				auto call = this->make_call();
+				call.set_position(requestedPos.value() / 100.0);
+				call.perform();
+			}
+			else {
+				if (requestedTilt.has_value()) {
+					auto call = this->make_call();
+					call.set_tilt(requestedTilt.value() / 100.0);
+					call.perform();
+				}
+			}
+
+			//this->tilt = pressCode / 10.0;
+			//this->publish_state();
+		}
+
+		;
 	}
 }

@@ -20,6 +20,8 @@ namespace esphome {
 			void set_close_duration(int close) { this->close_duration = close; }
 			void set_tilt_duration(int tilt) { this->tilt_duration = tilt; }
 			void set_assumed_state(bool value) { this->assumed_state = value; }
+			void StartCalibration();
+			void ProcessButton(std::string buttonType, std::string pressMode);
 		private:
 			int starting_time{ 0 };
 			int wait_time{ 0 };
@@ -32,8 +34,10 @@ namespace esphome {
 			int rest_tilt{ 0 };
 			int change_tilt{ 0 };
 			int publishingDelay{ 0 };
+			optional<float> deferred_tilt{};
 			cover::CoverOperation current_action{ cover::COVER_OPERATION_IDLE };
 			void publishCoverState();
+			void processDeferredTilts();
 		protected:
 			Trigger<>* open_trigger{ new Trigger<>() };
 			Trigger<>* close_trigger{ new Trigger<>() };
