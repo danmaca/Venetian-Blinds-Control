@@ -13,6 +13,7 @@ from esphome.const import (
 )
 
 CONF_TILT_DURATION = "tilt_duration"
+CONF_MOTOR_WARMUP_DELAY = "motor_warmup_delay"
 
 venetian_blinds_ns = cg.esphome_ns.namespace('venetian_blinds')
 VenetianBlinds = venetian_blinds_ns.class_('VenetianBlinds', cover.Cover, cg.Component)
@@ -26,6 +27,7 @@ CONFIG_SCHEMA = cover.COVER_SCHEMA.extend({
     cv.Required(CONF_STOP_ACTION): automation.validate_automation(single=True),
     cv.Required(CONF_TILT_DURATION): cv.positive_time_period_milliseconds,
     cv.Optional(CONF_ASSUMED_STATE, default=True): cv.boolean,
+    cv.Optional(CONF_MOTOR_WARMUP_DELAY): cv.positive_time_period_milliseconds,
 }).extend(cv.COMPONENT_SCHEMA)
 
 async def to_code(config):
@@ -45,3 +47,4 @@ async def to_code(config):
     )
     cg.add(var.set_tilt_duration(config[CONF_TILT_DURATION]))
     cg.add(var.set_assumed_state(config[CONF_ASSUMED_STATE]))
+    cg.add(var.set_motor_warmup_delay(config[CONF_MOTOR_WARMUP_DELAY]))

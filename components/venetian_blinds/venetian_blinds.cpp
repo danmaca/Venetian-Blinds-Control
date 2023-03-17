@@ -6,16 +6,18 @@ namespace esphome {
 	namespace venetian_blinds {
 
 		static const char* TAG = "venetian_blinds.cover";
-		static const int WaitTimeDefault = 180;// waiting for movement start, when little tilt change
+		static const int ButtonHoldingIterationWaitTime = 600;// wait among tilt steps when holding buttons
 		static const bool IsTestingMode = false;
+		static const bool IsMaxButtonOpenRangeRestricted = false;
 
 		using namespace esphome::cover;
 
 		void VenetianBlinds::dump_config() {
 			LOG_COVER("", "Venetian Blinds", this);
-			ESP_LOGCONFIG(TAG, "  Open Duration: %.1fs", this->open_duration / 1e3f);
-			ESP_LOGCONFIG(TAG, "  Close Duration: %.1fs", this->close_duration / 1e3f);
-			ESP_LOGCONFIG(TAG, "  Tilt Duration: %.1fs", this->tilt_duration / 1e3f);
+			ESP_LOGCONFIG(TAG, "  Open Duration: %.0fms", this->_open_duration / 1e0f);
+			ESP_LOGCONFIG(TAG, "  Close Duration: %.0fms", this->_close_duration / 1e0f);
+			ESP_LOGCONFIG(TAG, "  Tilt Duration: %.0fms", this->_tilt_duration / 1e0f);
+			ESP_LOGCONFIG(TAG, "  Motor Warmup Delay: %.0fms", this->_motor_warmup_delay / 1e0f);
 		}
 
 		void VenetianBlinds::setup() {
@@ -28,8 +30,8 @@ namespace esphome {
 				this->tilt = 0.0;
 			}
 
-			exact_pos = this->position * this->close_duration;
-			exact_tilt = this->tilt * this->tilt_duration;
+			_exact_pos = this->position * this->_close_duration;
+			_exact_tilt = this->tilt * this->_tilt_duration;
 
 			ESP_LOGCONFIG(TAG, "Initial position: %.1f", this->position * 100);
 			ESP_LOGCONFIG(TAG, "Initial tilt: %.1f", this->tilt * 100);
@@ -45,202 +47,261 @@ namespace esphome {
 
 		void VenetianBlinds::control(const CoverCall& call) {
 			if (call.get_position().has_value()) {
-				starting_pos = exact_pos;
-				starting_tilt = exact_tilt;
-				int new_pos = *call.get_position() * this->close_duration;
-				change_pos = exact_pos - new_pos;
-				rest_pos = change_pos;
-				change_tilt = 0;
-				rest_tilt = 0;
+				_starting_pos = _exact_pos;
+				_starting_tilt = _exact_tilt;
+				int new_pos = *call.get_position() * this->_close_duration;
+				_change_pos = _exact_pos - new_pos;
+				_rest_pos = _change_pos;
+				_change_tilt = 0;
+				_rest_tilt = 0;
 
-				if (rest_pos == 0)
+				if (_rest_pos == 0)
 					this->processDeferredTilts();
 			}
 
 			if (call.get_tilt().has_value()) {
-				starting_pos = exact_pos;
-				starting_tilt = exact_tilt;
-				int new_tilt = *call.get_tilt() * this->tilt_duration;
-				change_tilt = exact_tilt - new_tilt;
-				rest_tilt = change_tilt;
-				change_pos = 0;
-				rest_pos = 0;
+				_starting_pos = _exact_pos;
+				_starting_tilt = _exact_tilt;
+				int new_tilt = *call.get_tilt() * this->_tilt_duration;
+				_change_tilt = _exact_tilt - new_tilt;
+				_rest_tilt = _change_tilt;
+				_change_pos = 0;
+				_rest_pos = 0;
 			}
 
 			if (call.get_position().has_value() || call.get_tilt().has_value()) {
-				starting_time = millis();
-				publishingDelay = 0;
+				_starting_time = millis();
+				_publishingDelay = 0;
 			}
 
 			if (call.get_stop()) {
-				rest_pos = 0;
-				rest_tilt = 0;
-				change_pos = 0;
-				change_tilt = 0;
+				_rest_pos = 0;
+				_rest_tilt = 0;
+				_change_pos = 0;
+				_change_tilt = 0;
+				_buttonHoldingDirection = 0;
 				this->stop_trigger->trigger();
-				this->current_action = COVER_OPERATION_IDLE;
-				this->deferred_tilt.reset();
+				this->_current_action = COVER_OPERATION_IDLE;
+				this->_deferred_tilt.reset();
 				this->publishCoverState();
 			}
 		}
 
 		void VenetianBlinds::loop() {
-			if (wait_time > 0) {
-				if (wait_time > (millis() - starting_time))
+			if (_wait_time > 0) {
+				if (_wait_time > (millis() - _starting_time))
 					return;
 				else {
-					wait_time = 0;
-					starting_time = millis();
+					_wait_time = 0;
+					_starting_time = millis();
+					
+					if (this->processHoldedButton(false))
+						return;
 				}
 			}
 
-			if (rest_pos > 0 || rest_tilt < 0) {
-				if (this->current_action != COVER_OPERATION_CLOSING) {
+			if (_rest_pos > 0 || _rest_tilt < 0) {
+				if (this->_current_action != COVER_OPERATION_CLOSING) {
 					if (IsTestingMode == false)
 						this->close_trigger->trigger();
-					this->current_action = COVER_OPERATION_CLOSING;
-					wait_time = WaitTimeDefault;
+					this->_current_action = COVER_OPERATION_CLOSING;
+					_wait_time = this->_motor_warmup_delay;
 					return;
 				}
 
 				uint32_t current_time = millis();
-				int delta_time = current_time - starting_time;
-				publishingDelay++;
+				int delta_time = current_time - _starting_time;
+				_publishingDelay++;
 
-				rest_tilt = clamp(change_tilt + delta_time, -1 * this->tilt_duration, 0);
-				exact_tilt = clamp(starting_tilt + delta_time, 0, this->tilt_duration);
+				_rest_tilt = clamp(_change_tilt + delta_time, -1 * this->_tilt_duration, 0);
+				_exact_tilt = clamp(_starting_tilt + delta_time, 0, this->_tilt_duration);
 
-				rest_pos = clamp(change_pos - delta_time, 0, this->close_duration);
-				exact_pos = clamp(starting_pos - delta_time, 0, this->close_duration);
+				_rest_pos = clamp(_change_pos - delta_time, 0, this->_close_duration);
+				_exact_pos = clamp(_starting_pos - delta_time, 0, this->_close_duration);
 
-				if (rest_pos <= 0 && rest_tilt >= 0) {
+				if (_rest_pos <= 0 && _rest_tilt >= 0) {
 					this->stop_trigger->trigger();
-					this->current_action = COVER_OPERATION_IDLE;
-					this->processDeferredTilts();
+					this->_current_action = COVER_OPERATION_IDLE;
 					this->publishCoverState();
+					if (this->processHoldedButton(true) == false)
+						this->processDeferredTilts();
 				}
-				else if (publishingDelay % 100 == 0) {
+				else if (_publishingDelay % 100 == 0) {
 					this->publishCoverState();
 				}
 			}
-			else if (rest_pos < 0 || rest_tilt > 0) {
-				if (this->current_action != COVER_OPERATION_OPENING) {
+			else if (_rest_pos < 0 || _rest_tilt > 0) {
+				if (this->_current_action != COVER_OPERATION_OPENING) {
 					if (IsTestingMode == false)
 						this->open_trigger->trigger();
-					this->current_action = COVER_OPERATION_OPENING;
-					wait_time = WaitTimeDefault;
+					this->_current_action = COVER_OPERATION_OPENING;
+					_wait_time = this->_motor_warmup_delay;
 					return;
 				}
 
 				uint32_t current_time = millis();
-				int delta_time = current_time - starting_time;
-				publishingDelay++;
+				int delta_time = current_time - _starting_time;
+				_publishingDelay++;
 
-				rest_tilt = clamp(change_tilt - delta_time, 0, this->tilt_duration);
-				exact_tilt = clamp(starting_tilt - delta_time, 0, this->tilt_duration);
+				_rest_tilt = clamp(_change_tilt - delta_time, 0, this->_tilt_duration);
+				_exact_tilt = clamp(_starting_tilt - delta_time, 0, this->_tilt_duration);
 
-				rest_pos = clamp(change_pos + delta_time, -1 * this->close_duration, 0);
-				exact_pos = clamp(starting_pos + delta_time, 0, this->close_duration);
+				_rest_pos = clamp(_change_pos + delta_time, -1 * this->_close_duration, 0);
+				_exact_pos = clamp(_starting_pos + delta_time, 0, this->_close_duration);
 
-				if (rest_pos >= 0 && rest_tilt <= 0) {
+				if (_rest_pos >= 0 && _rest_tilt <= 0) {
 					this->stop_trigger->trigger();
-					this->current_action = COVER_OPERATION_IDLE;
+					this->_current_action = COVER_OPERATION_IDLE;
 					this->publishCoverState();
-					this->processDeferredTilts();
+					if (this->processHoldedButton(true) == false)
+						this->processDeferredTilts();
 				}
-				else if (publishingDelay % 100 == 0) {
+				else if (_publishingDelay % 100 == 0) {
 					this->publishCoverState();
 				}
 			}
 		}
 
 		void VenetianBlinds::publishCoverState() {
-			this->position = exact_pos / (float)this->close_duration;
-			this->tilt = exact_tilt / (float)this->tilt_duration;
+			this->position = _exact_pos / (float)this->_close_duration;
+			this->tilt = _exact_tilt / (float)this->_tilt_duration;
 			this->publish_state();
 		}
 
 		void VenetianBlinds::processDeferredTilts() {
-			if (this->deferred_tilt.has_value()) {
-				ESP_LOGD(TAG, "processing deferred_tilt= %.1f", this->deferred_tilt.value() / 1.0);
+			if (this->_deferred_tilt.has_value()) {
+				ESP_LOGD(TAG, "processing _deferred_tilt= %.1f", this->_deferred_tilt.value() / 1.0);
+				_wait_time = 400;// motor required some time when direction of movement change (cover down, stop, wait, open tilt)
+
 				auto call = this->make_call();
-				call.set_tilt(this->deferred_tilt.value() / 100.0);
-				this->deferred_tilt.reset();
+				call.set_tilt(this->_deferred_tilt.value() / 100.0);
+				this->_deferred_tilt.reset();
 				call.perform();
 			}
 		}
 
+		bool VenetianBlinds::processHoldedButton(bool justProceeded) {
+			if (_buttonHoldingDirection != 0) {
+				if (justProceeded) {
+					_wait_time = ButtonHoldingIterationWaitTime;
+				}
+				else {
+					int exactTiltPerc = _exact_tilt / (float)this->_tilt_duration * 100;
+					int requestedTiltPerc = clamp(exactTiltPerc + (_buttonHoldingDirection * 9), 0, 100);
+
+					if (exactTiltPerc == requestedTiltPerc) {
+						_buttonHoldingDirection = 0;
+					}
+					else {
+						ESP_LOGD(TAG, "processHoldedButton requestedTiltPerc= %.1f", requestedTiltPerc / 1.0);
+
+						auto call = this->make_call();
+						call.set_tilt(requestedTiltPerc / 100.0);
+						this->_deferred_tilt.reset();
+						call.perform();
+					}
+				}
+				return true;
+			}
+			return false;
+		}
+
 		void VenetianBlinds::StartCalibration() {
-			this->position = .3;
-			this->tilt = .3;
-			this->publish_state();
+			int exactPosPerc = _exact_pos / (float)this->_close_duration * 100;
+			if (exactPosPerc <= 10) {
+				_exact_pos = this->_close_duration + 1000;
+				auto call = this->make_call();
+				call.set_position(0.0);
+				call.perform();
+			}
+			else {
+				_exact_pos = -1000;
+				auto call = this->make_call();
+				call.set_position(1.0);
+				call.perform();
+			}
 		}
 
 		void VenetianBlinds::ProcessButton(std::string buttonType, std::string pressMode) {
-			int exactPosPerc = exact_pos / (float)this->close_duration * 100;
-			int exactTiltPerc = exact_tilt / (float)this->tilt_duration * 100;
+			int exactPosPerc = _exact_pos / (float)this->_close_duration * 100;
+			int exactTiltPerc = _exact_tilt / (float)this->_tilt_duration * 100;
 
-			optional<int> requestedPos{};
-			optional<int> requestedTilt{};
+			optional<int> requestedPosPerc{};
+			optional<int> requestedTiltPerc{};
+			bool requestedStop{ false };
 
 			if (buttonType == "up") {
 				if (pressMode == "single")
 				{
-					if (exactPosPerc < 3 && exactTiltPerc > 5) {
-						requestedPos = 0;
-						requestedTilt = 0;
+					if (this->_current_action == COVER_OPERATION_OPENING) {
+						requestedStop = true;
 					}
-					else if (exactPosPerc < 10) {
-						requestedPos = 10;
-						requestedTilt = 0;
+					else if (exactPosPerc < 3 && exactTiltPerc > 5) {
+						requestedPosPerc = 0;
+						requestedTiltPerc = 0;
+					}
+					else if (exactPosPerc < (IsMaxButtonOpenRangeRestricted ? 10 : 100)) {
+						requestedPosPerc = (IsMaxButtonOpenRangeRestricted ? 10 : 100);
+						requestedTiltPerc = 0;
 					}
 				}
 				else if (pressMode == "double") {
-					requestedPos = 10;
-					requestedTilt = 0;
+					requestedPosPerc = (IsMaxButtonOpenRangeRestricted ? 10 : 100);
+					requestedTiltPerc = 0;
+				}
+				else if (pressMode == "hold") {
+					_buttonHoldingDirection = -1;
+					this->processHoldedButton(false);
 				}
 			}
 			else if (buttonType == "down") {
 				if (pressMode == "single") {
-					if (exactPosPerc > 3) {
-						requestedPos = 0;
-						requestedTilt = 0;
+					if (this->_current_action == COVER_OPERATION_CLOSING) {
+						requestedStop = true;
 					}
-					else if (exactPosPerc > 0) {
-						requestedPos = 0;
-						requestedTilt = 100;
+					else if (exactPosPerc > 0 || exactTiltPerc < 100) {
+						requestedPosPerc = 0;
+						requestedTiltPerc = 100;
 					}
 				}
 				else if (pressMode == "double") {
-					requestedPos = 0;
-					requestedTilt = 100;
+					if (exactPosPerc > 3 || exactTiltPerc > 0) {
+						requestedPosPerc = 0;
+						requestedTiltPerc = 0;
+					}
+				}
+				else if (pressMode == "hold") {
+					_buttonHoldingDirection = 1;
+					this->processHoldedButton(false);
 				}
 			}
 
-			this->deferred_tilt.reset();
+			if (pressMode == "release") {
+				_buttonHoldingDirection = 0;
+			}
 
-			if (requestedPos.has_value()) {
-				if (requestedTilt.has_value()) {
-					ESP_LOGD(TAG, "set deferred_tilt= %.1f", requestedTilt.value() / 1.0);
-					this->deferred_tilt = requestedTilt.value() / 1.0;
+			this->_deferred_tilt.reset();
+
+			if (requestedStop) {
+				auto call = this->make_call();
+				call.set_command_stop();
+				call.perform();
+			}
+			else if (requestedPosPerc.has_value()) {
+				if (requestedTiltPerc.has_value()) {
+					ESP_LOGD(TAG, "set _deferred_tilt= %.1f", requestedTiltPerc.value() / 1.0);
+					this->_deferred_tilt = requestedTiltPerc.value() / 1.0;
 				}
 
 				auto call = this->make_call();
-				call.set_position(requestedPos.value() / 100.0);
+				call.set_position(requestedPosPerc.value() / 100.0);
 				call.perform();
 			}
-			else {
-				if (requestedTilt.has_value()) {
-					auto call = this->make_call();
-					call.set_tilt(requestedTilt.value() / 100.0);
-					call.perform();
-				}
+			else if (requestedTiltPerc.has_value()) {
+				auto call = this->make_call();
+				call.set_tilt(requestedTiltPerc.value() / 100.0);
+				call.perform();
 			}
-
-			//this->tilt = pressCode / 10.0;
-			//this->publish_state();
-		}
-
-		;
+		};
 	}
 }
