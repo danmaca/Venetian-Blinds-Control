@@ -18,7 +18,7 @@ CONF_MOTOR_WARMUP_DELAY = "motor_warmup_delay"
 venetian_blinds_ns = cg.esphome_ns.namespace('venetian_blinds')
 VenetianBlinds = venetian_blinds_ns.class_('VenetianBlinds', cover.Cover, cg.Component)
 
-CONFIG_SCHEMA = cover.COVER_SCHEMA.extend({
+CONFIG_SCHEMA = cover._COVER_SCHEMA.extend({
     cv.GenerateID(): cv.declare_id(VenetianBlinds),
     cv.Required(CONF_OPEN_ACTION): automation.validate_automation(single=True),
     cv.Required(CONF_OPEN_DURATION): cv.positive_time_period_milliseconds,

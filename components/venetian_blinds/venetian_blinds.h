@@ -23,6 +23,8 @@ namespace esphome {
 			void set_motor_warmup_delay(int delay) { this->_motor_warmup_delay = delay; }
 			void StartCalibration();
 			void ProcessButton(std::string buttonType, std::string pressMode);
+			void SetAutoPosition(float positionPerc, float tiltPerc);
+			void SetAutoMode(bool isAutoMode);
 		private:
 			int _starting_time{ 0 };
 			int _wait_time{ 0 };
@@ -38,9 +40,18 @@ namespace esphome {
 			optional<float> _deferred_tilt{};
 			cover::CoverOperation _current_action{ cover::COVER_OPERATION_IDLE };
 			int _buttonHoldingDirection{ 0 };
-			void publishCoverState();
-			void processDeferredTilts();
-			bool processHoldedButton(bool justProceeded);
+			
+			bool _isAutoMode{ true };
+			bool _isAutoProcessing{ false };
+			float _autoPositionPerc{ 0 };
+			float _autoTiltPerc{ 0 };
+
+			void PublishCoverState();
+			void ProcessDeferredTilts();
+			bool ProcessHoldedButton(bool justProceeded);
+			void MoveToPosition(float positionPerc, float tiltPerc);
+			void RestoreToAutoMode();
+			void TryEndAutoProcessing();
 		protected:
 			Trigger<>* open_trigger{ new Trigger<>() };
 			Trigger<>* close_trigger{ new Trigger<>() };

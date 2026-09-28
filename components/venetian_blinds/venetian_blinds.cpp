@@ -7,7 +7,7 @@ namespace esphome {
 
 		static const char* TAG = "venetian_blinds.cover";
 		static const int ButtonHoldingIterationWaitTime = 600;// wait among tilt steps when holding buttons
-		static const bool IsTestingMode = false;
+		static const bool IsTestingMode = true;
 		static const bool IsMaxButtonOpenRangeRestricted = false;
 
 		using namespace esphome::cover;
@@ -56,7 +56,7 @@ namespace esphome {
 				_rest_tilt = 0;
 
 				if (_rest_pos == 0)
-					this->processDeferredTilts();
+					this->ProcessDeferredTilts();
 			}
 
 			if (call.get_tilt().has_value()) {
@@ -83,7 +83,7 @@ namespace esphome {
 				this->stop_trigger->trigger();
 				this->_current_action = COVER_OPERATION_IDLE;
 				this->_deferred_tilt.reset();
-				this->publishCoverState();
+				this->PublishCoverState();
 			}
 		}
 
@@ -95,7 +95,7 @@ namespace esphome {
 					_wait_time = 0;
 					_starting_time = millis();
 					
-					if (this->processHoldedButton(false))
+					if (this->ProcessHoldedButton(false))
 						return;
 				}
 			}
@@ -104,6 +104,7 @@ namespace esphome {
 				if (this->_current_action != COVER_OPERATION_CLOSING) {
 					if (IsTestingMode == false)
 						this->close_trigger->trigger();
+					ESP_LOGD(TAG, "Current Operation: Closing");
 					this->_current_action = COVER_OPERATION_CLOSING;
 					_wait_time = this->_motor_warmup_delay;
 					return;
@@ -122,18 +123,20 @@ namespace esphome {
 				if (_rest_pos <= 0 && _rest_tilt >= 0) {
 					this->stop_trigger->trigger();
 					this->_current_action = COVER_OPERATION_IDLE;
-					this->publishCoverState();
-					if (this->processHoldedButton(true) == false)
-						this->processDeferredTilts();
+					this->PublishCoverState();
+					this->TryEndAutoProcessing();
+					if (this->ProcessHoldedButton(true) == false)
+						this->ProcessDeferredTilts();
 				}
 				else if (_publishingDelay % 100 == 0) {
-					this->publishCoverState();
+					this->PublishCoverState();
 				}
 			}
 			else if (_rest_pos < 0 || _rest_tilt > 0) {
 				if (this->_current_action != COVER_OPERATION_OPENING) {
 					if (IsTestingMode == false)
 						this->open_trigger->trigger();
+					ESP_LOGD(TAG, "Current Operation: Opening");
 					this->_current_action = COVER_OPERATION_OPENING;
 					_wait_time = this->_motor_warmup_delay;
 					return;
@@ -152,23 +155,24 @@ namespace esphome {
 				if (_rest_pos >= 0 && _rest_tilt <= 0) {
 					this->stop_trigger->trigger();
 					this->_current_action = COVER_OPERATION_IDLE;
-					this->publishCoverState();
-					if (this->processHoldedButton(true) == false)
-						this->processDeferredTilts();
+					this->PublishCoverState();
+					this->TryEndAutoProcessing();
+					if (this->ProcessHoldedButton(true) == false)
+						this->ProcessDeferredTilts();
 				}
 				else if (_publishingDelay % 100 == 0) {
-					this->publishCoverState();
+					this->PublishCoverState();
 				}
 			}
 		}
 
-		void VenetianBlinds::publishCoverState() {
+		void VenetianBlinds::PublishCoverState() {
 			this->position = _exact_pos / (float)this->_close_duration;
 			this->tilt = _exact_tilt / (float)this->_tilt_duration;
 			this->publish_state();
 		}
 
-		void VenetianBlinds::processDeferredTilts() {
+		void VenetianBlinds::ProcessDeferredTilts() {
 			if (this->_deferred_tilt.has_value()) {
 				ESP_LOGD(TAG, "processing _deferred_tilt= %.1f", this->_deferred_tilt.value() / 1.0);
 				_wait_time = 400;// motor required some time when direction of movement change (cover down, stop, wait, open tilt)
@@ -180,7 +184,7 @@ namespace esphome {
 			}
 		}
 
-		bool VenetianBlinds::processHoldedButton(bool justProceeded) {
+		bool VenetianBlinds::ProcessHoldedButton(bool justProceeded) {
 			if (_buttonHoldingDirection != 0) {
 				if (justProceeded) {
 					_wait_time = ButtonHoldingIterationWaitTime;
@@ -193,7 +197,7 @@ namespace esphome {
 						_buttonHoldingDirection = 0;
 					}
 					else {
-						ESP_LOGD(TAG, "processHoldedButton requestedTiltPerc= %.1f", requestedTiltPerc / 1.0);
+						ESP_LOGD(TAG, "ProcessHoldedButton requestedTiltPerc= %.1f", requestedTiltPerc / 1.0);
 
 						auto call = this->make_call();
 						call.set_tilt(requestedTiltPerc / 100.0);
@@ -226,9 +230,9 @@ namespace esphome {
 			int exactPosPerc = _exact_pos / (float)this->_close_duration * 100;
 			int exactTiltPerc = _exact_tilt / (float)this->_tilt_duration * 100;
 
-			optional<int> requestedPosPerc{};
-			optional<int> requestedTiltPerc{};
-			bool requestedStop{ false };
+			float requestedPosPerc = -1;
+			float requestedTiltPerc = -1;
+			bool requestedStop = false;
 
 			if (buttonType == "up") {
 				if (pressMode == "single")
@@ -251,7 +255,7 @@ namespace esphome {
 				}
 				else if (pressMode == "hold") {
 					_buttonHoldingDirection = -1;
-					this->processHoldedButton(false);
+					this->ProcessHoldedButton(false);
 				}
 			}
 			else if (buttonType == "down") {
@@ -272,7 +276,7 @@ namespace esphome {
 				}
 				else if (pressMode == "hold") {
 					_buttonHoldingDirection = 1;
-					this->processHoldedButton(false);
+					this->ProcessHoldedButton(false);
 				}
 			}
 
@@ -287,21 +291,83 @@ namespace esphome {
 				call.set_command_stop();
 				call.perform();
 			}
-			else if (requestedPosPerc.has_value()) {
-				if (requestedTiltPerc.has_value()) {
-					ESP_LOGD(TAG, "set _deferred_tilt= %.1f", requestedTiltPerc.value() / 1.0);
-					this->_deferred_tilt = requestedTiltPerc.value() / 1.0;
+			else {
+				this->MoveToPosition(requestedPosPerc, requestedTiltPerc);
+			}
+		};
+
+		void VenetianBlinds::SetAutoPosition(float positionPerc, float tiltPerc) {
+			ESP_LOGD(TAG, "SetAutoPosition positionPerc= %.1f", positionPerc / 1.0);
+			ESP_LOGD(TAG, "SetAutoPosition tiltPerc= %.1f", tiltPerc / 1.0);
+			if (positionPerc >= 0)
+				_autoPositionPerc = positionPerc;
+			if (tiltPerc >= 0)
+				_autoTiltPerc = tiltPerc;
+
+			if (_autoPositionPerc < 0)
+				_autoPositionPerc = 0;
+			if (_autoTiltPerc < 0)
+				_autoTiltPerc = 0;
+
+			if (_isAutoMode) {
+				_isAutoProcessing = true;
+				this->MoveToPosition(positionPerc, tiltPerc);
+			}
+		};
+
+		void VenetianBlinds::SetAutoMode(bool isAutoMode) {
+			if (isAutoMode)
+				ESP_LOGD(TAG, "Set Mode: Auto");
+			else
+				ESP_LOGD(TAG, "Set Mode: Manual");
+
+			if (_isAutoMode == false)
+				this->RestoreToAutoMode();
+			_isAutoMode = isAutoMode;
+		}
+
+		void VenetianBlinds::MoveToPosition(float positionPerc, float tiltPerc) {
+			if (positionPerc >= 0) {
+				if (tiltPerc >= 0) {
+					ESP_LOGD(TAG, "set _deferred_tilt= %.1f", tiltPerc / 1.0);
+					this->_deferred_tilt = tiltPerc / 1.0;
 				}
 
 				auto call = this->make_call();
-				call.set_position(requestedPosPerc.value() / 100.0);
+				call.set_position(positionPerc / 100.0);
 				call.perform();
 			}
-			else if (requestedTiltPerc.has_value()) {
+			else if (tiltPerc >= 0) {
 				auto call = this->make_call();
-				call.set_tilt(requestedTiltPerc.value() / 100.0);
+				call.set_tilt(tiltPerc / 100.0);
 				call.perform();
 			}
 		};
+
+		void VenetianBlinds::RestoreToAutoMode() {
+			ESP_LOGD(TAG, "RestoreToAutoMode");
+			_isAutoMode = true;
+			_isAutoProcessing = true;
+			this->MoveToPosition(_autoPositionPerc, _autoTiltPerc);
+		}
+
+		void VenetianBlinds::TryEndAutoProcessing() {
+			if (this->_deferred_tilt.has_value() == false)
+			{
+				if (_isAutoProcessing) {
+					ESP_LOGD(TAG, "TryEndAutoProcessing: Ended Auto Processing");
+					_isAutoProcessing = false;
+				}
+				else if (_isAutoMode) {
+					ESP_LOGD(TAG, "TryEndAutoProcessing: Manual Set");
+					_isAutoMode = false;
+				}
+			}
+
+			if (_isAutoMode)
+				ESP_LOGD(TAG, "Current Mode: Auto");
+			else
+				ESP_LOGD(TAG, "Current Mode: Manual");
+		}
 	}
 }
