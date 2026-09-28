@@ -7,7 +7,7 @@ namespace esphome {
 
 		static const char* TAG = "venetian_blinds.cover";
 		static const int ButtonHoldingIterationWaitTime = 600;// wait among tilt steps when holding buttons
-		static const bool IsTestingMode = true;
+		static const bool IsTestingMode = false;
 		static const bool IsMaxButtonOpenRangeRestricted = false;
 
 		using namespace esphome::cover;
@@ -124,9 +124,9 @@ namespace esphome {
 					this->stop_trigger->trigger();
 					this->_current_action = COVER_OPERATION_IDLE;
 					this->PublishCoverState();
-					this->TryEndAutoProcessing();
 					if (this->ProcessHoldedButton(true) == false)
 						this->ProcessDeferredTilts();
+					this->TryEndAutoProcessing();
 				}
 				else if (_publishingDelay % 100 == 0) {
 					this->PublishCoverState();
@@ -156,9 +156,9 @@ namespace esphome {
 					this->stop_trigger->trigger();
 					this->_current_action = COVER_OPERATION_IDLE;
 					this->PublishCoverState();
-					this->TryEndAutoProcessing();
 					if (this->ProcessHoldedButton(true) == false)
 						this->ProcessDeferredTilts();
+					this->TryEndAutoProcessing();
 				}
 				else if (_publishingDelay % 100 == 0) {
 					this->PublishCoverState();
@@ -243,6 +243,14 @@ namespace esphome {
 					else if (exactPosPerc < 3 && exactTiltPerc > 5) {
 						requestedPosPerc = 0;
 						requestedTiltPerc = 0;
+
+						// nastaveni auto tilt a návrat do AutoMode
+						if (_isAutoMode == false && _autoTiltPerc >= 0 && _autoTiltPerc < 90) {
+							ESP_LOGD(TAG, "Restoring AutoMode, autoTiltPerc= %.1f", _autoTiltPerc / 1.0);
+							requestedTiltPerc = _autoTiltPerc;
+							_isAutoMode = true;
+							_isAutoProcessing = true;
+						}
 					}
 					else if (exactPosPerc < (IsMaxButtonOpenRangeRestricted ? 10 : 100)) {
 						requestedPosPerc = (IsMaxButtonOpenRangeRestricted ? 10 : 100);
@@ -266,6 +274,14 @@ namespace esphome {
 					else if (exactPosPerc > 0 || exactTiltPerc < 100) {
 						requestedPosPerc = 0;
 						requestedTiltPerc = 100;
+
+						// nastaveni auto tilt a návrat do AutoMode
+						if (_isAutoMode == false && _autoTiltPerc >= 0) {
+							ESP_LOGD(TAG, "Restoring AutoMode, autoTiltPerc= %.1f", _autoTiltPerc / 1.0);
+							requestedTiltPerc = _autoTiltPerc;
+							_isAutoMode = true;
+							_isAutoProcessing = true;
+						}
 					}
 				}
 				else if (pressMode == "double") {
@@ -297,8 +313,8 @@ namespace esphome {
 		};
 
 		void VenetianBlinds::SetAutoPosition(float positionPerc, float tiltPerc) {
-			ESP_LOGD(TAG, "SetAutoPosition positionPerc= %.1f", positionPerc / 1.0);
-			ESP_LOGD(TAG, "SetAutoPosition tiltPerc= %.1f", tiltPerc / 1.0);
+			ESP_LOGD(TAG, "SetAuto positionPerc= %.1f", positionPerc / 1.0);
+			ESP_LOGD(TAG, "SetAuto tiltPerc= %.1f", tiltPerc / 1.0);
 			if (positionPerc >= 0)
 				_autoPositionPerc = positionPerc;
 			if (tiltPerc >= 0)
@@ -321,12 +337,14 @@ namespace esphome {
 			else
 				ESP_LOGD(TAG, "Set Mode: Manual");
 
-			if (_isAutoMode == false)
+			if (isAutoMode && _isAutoMode == false)
 				this->RestoreToAutoMode();
 			_isAutoMode = isAutoMode;
 		}
 
 		void VenetianBlinds::MoveToPosition(float positionPerc, float tiltPerc) {
+			ESP_LOGD(TAG, "MoveTo positionPerc= %.1f", positionPerc / 1.0);
+			ESP_LOGD(TAG, "MoveTo tiltPerc= %.1f", tiltPerc / 1.0);
 			if (positionPerc >= 0) {
 				if (tiltPerc >= 0) {
 					ESP_LOGD(TAG, "set _deferred_tilt= %.1f", tiltPerc / 1.0);
@@ -348,10 +366,12 @@ namespace esphome {
 			ESP_LOGD(TAG, "RestoreToAutoMode");
 			_isAutoMode = true;
 			_isAutoProcessing = true;
-			this->MoveToPosition(_autoPositionPerc, _autoTiltPerc);
+			if (_autoPositionPerc >= 0 || _autoTiltPerc >= 0)
+				this->MoveToPosition(_autoPositionPerc, _autoTiltPerc);
 		}
 
 		void VenetianBlinds::TryEndAutoProcessing() {
+			ESP_LOGD(TAG, "TryEndAutoProcessing: Check");
 			if (this->_deferred_tilt.has_value() == false)
 			{
 				if (_isAutoProcessing) {
